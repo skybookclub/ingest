@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
@@ -37,17 +36,17 @@ func main() {
 
 	arg := "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
 
-	fmt.Println("dialing: ", arg)
+	logger.Info("dialing", "url", arg)
 	d := websocket.DefaultDialer
 	con, _, err := d.Dial(arg, http.Header{})
 	if err != nil {
-		fmt.Printf("dial failure: %v", err)
+		logger.Error("error dialing", "err", err)
 		return
 	}
 
-	fmt.Println("Stream Started", time.Now().Format(time.RFC3339))
+	logger.Info("Stream Started")
 	defer func() {
-		fmt.Println("Stream Exited", time.Now().Format(time.RFC3339))
+		logger.Info("Stream Exited")
 	}()
 
 	go func() {
@@ -62,37 +61,9 @@ func main() {
 					continue
 				}
 
-				rr, err := repo.ReadRepoFromCar(ctx, bytes.NewReader(evt.Blocks))
+				pst, err := parsePost(ctx, evt, op)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "error reading repo from car: %v\n", err)
-					return nil
-				}
-
-				rc, rec, err := rr.GetRecord(ctx, op.Path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error getting record: %v\n", err)
-					return nil
-				}
-
-				if lexutil.LexLink(rc) != *op.Cid {
-					fmt.Fprintf(os.Stderr, "mismatch in record and op cid: %s != %s\n", rc, *op.Cid)
-					return fmt.Errorf("mismatch in record and op cid: %s != %s", rc, *op.Cid)
-				}
-
-				banana := lexutil.LexiconTypeDecoder{
-					Val: rec,
-				}
-
-				b, err := banana.MarshalJSON()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error marshalling record: %v\n", err)
-					return nil
-				}
-
-				var pst = appbsky.FeedPost{}
-				err = json.Unmarshal(b, &pst)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error unmarshalling record: %v\n", err)
+					logger.Error("error parsing post", "err", err)
 					return nil
 				}
 
@@ -106,4 +77,36 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+}
+
+func parsePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp) (*appbsky.FeedPost, error) {
+	rr, err := repo.ReadRepoFromCar(ctx, bytes.NewReader(evt.Blocks))
+	if err != nil {
+		return nil, fmt.Errorf("error reading repo from car: %v", err)
+	}
+
+	rc, rec, err := rr.GetRecord(ctx, op.Path)
+	if err != nil {
+		return nil, fmt.Errorf("error getting record: %v", err)
+	}
+
+	if lexutil.LexLink(rc) != *op.Cid {
+		return nil, fmt.Errorf("mismatch in record and op cid: %s != %s", rc, *op.Cid)
+	}
+
+	banana := lexutil.LexiconTypeDecoder{
+		Val: rec,
+	}
+
+	b, err := banana.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling record: %v\n", err)
+	}
+
+	var pst = appbsky.FeedPost{}
+	err = json.Unmarshal(b, &pst)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshalling record: %v\n", err)
+	}
+	return &pst, nil
 }
