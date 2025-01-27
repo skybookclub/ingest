@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -22,6 +24,17 @@ import (
 )
 
 var logger *slog.Logger
+
+type Review struct {
+	isbn   string
+	did    string
+	text   string
+	rating int16
+}
+
+const (
+	hashtag = "#skybookclub"
+)
 
 func main() {
 	// Initialize logger
@@ -64,12 +77,21 @@ func main() {
 				pst, err := parsePost(ctx, evt, op)
 				if err != nil {
 					logger.Error("error parsing post", "err", err)
-					return nil
+					continue
 				}
 
-				if strings.Contains(pst.Text, "#skybookclub") {
-					fmt.Printf("post: %s\n", pst.Text)
+				if !strings.Contains(pst.Text, hashtag) {
+					continue
 				}
+
+				review, err := extractReviewdata(pst.Text)
+				if err != nil {
+					logger.Error("error extracting review data", "err", err)
+					continue
+				}
+
+				logger.Info("review data", "isbn", review.isbn, "rating", review.rating, "text", review.text)
+
 			}
 			return nil
 		},
@@ -109,4 +131,38 @@ func parsePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *
 		return nil, fmt.Errorf("error unmarshalling record: %v\n", err)
 	}
 	return &pst, nil
+}
+
+func extractReviewdata(str string) (*Review, error) {
+	review := &Review{}
+
+	// ISBN regex pattern matching 10 or 13 digits, allowing hyphens
+	isbnRegex := regexp.MustCompile(`isbn:([0-9-]{10,17})`)
+	matches := isbnRegex.FindStringSubmatch(str)
+
+	if len(matches) > 1 {
+		// Store ISBN digits as string without conversion to int
+		review.isbn = regexp.MustCompile(`[^0-9]`).ReplaceAllString(matches[1], "")
+	}
+
+	ratingRegex := regexp.MustCompile(`([0-5])/5`)
+	matches = ratingRegex.FindStringSubmatch(str)
+	if len(matches) > 1 {
+		rating, err := strconv.ParseInt(matches[1], 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing rating: %v", err)
+		}
+
+		review.rating = int16(rating)
+	}
+
+	// Clean the review text by removing patterns
+	cleanText := str
+	cleanText = isbnRegex.ReplaceAllString(cleanText, "")                   // Remove ISBN
+	cleanText = ratingRegex.ReplaceAllString(cleanText, "")                 // Remove rating
+	cleanText = regexp.MustCompile(hashtag).ReplaceAllString(cleanText, "") // Remove hashtags
+	cleanText = strings.TrimSpace(cleanText)                                // Remove extra whitespace
+
+	review.text = cleanText
+	return review, nil
 }
