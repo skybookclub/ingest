@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,8 @@ import (
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/repo"
 	"github.com/gorilla/websocket"
+
+	_ "github.com/lib/pq"
 )
 
 var logger *slog.Logger
@@ -45,6 +48,27 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
 	defer stop()
+
+	dbUser := os.Getenv("POSTGRES_USER")
+	dbName := os.Getenv("POSTGRES_DATABASE")
+	dbPassword := os.Getenv("POSTGRES_PASSWORD")
+
+	if dbUser == "" || dbName == "" || dbPassword == "" {
+		logger.Error("required environment variables not set",
+			"POSTGRES_USER", dbUser == "",
+			"POSTGRES_DATABASE", dbName == "",
+			"POSTGRES_PASSWORD", dbPassword == "")
+		return
+	}
+
+	connStr := fmt.Sprintf("user=%s dbname=%s password=%s sslmode=disable",
+		dbUser, dbName, dbPassword)
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		logger.Error("error connecting to database", "err", err)
+		return
+	}
 
 	logger.Info("starting application")
 
@@ -94,6 +118,10 @@ func main() {
 
 				logger.Info("review data", "did", review.did, "isbn10", review.isbn10, "isbn13", review.isbn13, "rating", review.rating, "text", review.text)
 
+				if err := insert(db, review); err != nil {
+					logger.Error("error inserting review", "err", err)
+				}
+
 			}
 			return nil
 		},
@@ -101,6 +129,22 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+}
+
+func insert(db *sql.DB, review *Review) error {
+	const query = `
+		INSERT INTO reviews (isbn10, isbn13, did, text, rating, created_at, updated_at) VALUES ($1, $2, $3, $4, $5 ,NOW(), NOW())
+		ON CONFLICT ON CONSTRAINT reviews_pkey DO UPDATE SET
+			did = EXCLUDED.did,
+			text = EXCLUDED.text,
+			rating = EXCLUDED.rating,
+			updated_at = NOW()
+	`
+	_, err := db.Exec(query, review.isbn10, review.isbn13, review.did, review.text, review.rating)
+	if err != nil {
+		return fmt.Errorf("error inserting review: %v", err)
+	}
+	return nil
 }
 
 func parsePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp) (*appbsky.FeedPost, error) {
