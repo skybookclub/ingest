@@ -26,7 +26,8 @@ import (
 var logger *slog.Logger
 
 type Review struct {
-	isbn   string
+	isbn10 string
+	isbn13 string
 	did    string
 	text   string
 	rating int16
@@ -89,8 +90,9 @@ func main() {
 					logger.Error("error extracting review data", "err", err)
 					continue
 				}
+				review.did = evt.Repo
 
-				logger.Info("review data", "isbn", review.isbn, "rating", review.rating, "text", review.text)
+				logger.Info("review data", "did", review.did, "isbn10", review.isbn10, "isbn13", review.isbn13, "rating", review.rating, "text", review.text)
 
 			}
 			return nil
@@ -133,6 +135,63 @@ func parsePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *
 	return &pst, nil
 }
 
+func convertISBN10to13(isbn10 string) (string, error) {
+	// Validate ISBN-10 length
+	if len(isbn10) != 10 {
+		return "", fmt.Errorf("invalid ISBN-10 length: %d", len(isbn10))
+	}
+
+	// Take first 9 digits and prepend 978
+	isbn13 := "978" + isbn10[:9]
+
+	// Calculate check digit
+	sum := 0
+	for i := 0; i < 12; i++ {
+		digit := int(isbn13[i] - '0')
+		if i%2 == 0 {
+			sum += digit
+		} else {
+			sum += digit * 3
+		}
+	}
+
+	checkDigit := (10 - (sum % 10)) % 10
+	isbn13 = isbn13 + strconv.Itoa(checkDigit)
+
+	return isbn13, nil
+}
+
+func convertISBN13to10(isbn13 string) (string, error) {
+	// Validate ISBN-13 length and prefix
+	if len(isbn13) != 13 {
+		return "", fmt.Errorf("invalid ISBN-13 length: %d", len(isbn13))
+	}
+	if !strings.HasPrefix(isbn13, "978") {
+		return "", fmt.Errorf("ISBN-13 must start with 978 to convert to ISBN-10")
+	}
+
+	// Remove "978" prefix
+	isbn10 := isbn13[3:12]
+
+	// Calculate check digit
+	sum := 0
+	for i := 0; i < 9; i++ {
+		digit := int(isbn10[i] - '0')
+		sum += digit * (10 - i)
+	}
+	checksum := (11 - (sum % 11)) % 11
+
+	// Convert check digit to string (X for 10)
+	var checkDigit string
+	if checksum == 10 {
+		checkDigit = "X"
+	} else {
+		checkDigit = strconv.Itoa(checksum)
+	}
+
+	return isbn10 + checkDigit, nil
+}
+
 func extractReviewdata(str string) (*Review, error) {
 	review := &Review{}
 
@@ -141,8 +200,18 @@ func extractReviewdata(str string) (*Review, error) {
 	matches := isbnRegex.FindStringSubmatch(str)
 
 	if len(matches) > 1 {
-		// Store ISBN digits as string without conversion to int
-		review.isbn = regexp.MustCompile(`[^0-9]`).ReplaceAllString(matches[1], "")
+		isbn := regexp.MustCompile(`[^0-9]`).ReplaceAllString(matches[1], "")
+		if len(isbn) == 10 {
+			review.isbn10 = isbn
+			if isbn13, err := convertISBN10to13(isbn); err == nil {
+				review.isbn13 = isbn13
+			}
+		} else if len(isbn) == 13 {
+			review.isbn13 = isbn
+			if isbn10, err := convertISBN13to10(isbn); err == nil {
+				review.isbn10 = isbn10
+			}
+		}
 	}
 
 	ratingRegex := regexp.MustCompile(`([0-5])/5`)
