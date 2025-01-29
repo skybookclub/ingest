@@ -132,15 +132,31 @@ func main() {
 }
 
 func insert(db *sql.DB, review *Review) error {
-	const query = `
-		INSERT INTO reviews (isbn10, isbn13, did, text, rating, created_at, updated_at) VALUES ($1, $2, $3, $4, $5 ,NOW(), NOW())
+	// First check and insert book if needed
+	const bookQuery = `
+		INSERT INTO books (isbn10, isbn13, created_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (isbn10, isbn13) DO NOTHING
+	`
+
+	if review.isbn10 != "" || review.isbn13 != "" {
+		_, err := db.Exec(bookQuery, review.isbn10, review.isbn13)
+		if err != nil {
+			return fmt.Errorf("error inserting book: %v", err)
+		}
+	}
+
+	// Then insert the review
+	const reviewQuery = `
+		INSERT INTO reviews (isbn10, isbn13, did, text, rating, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 		ON CONFLICT ON CONSTRAINT reviews_pkey DO UPDATE SET
 			did = EXCLUDED.did,
 			text = EXCLUDED.text,
 			rating = EXCLUDED.rating,
 			updated_at = NOW()
 	`
-	_, err := db.Exec(query, review.isbn10, review.isbn13, review.did, review.text, review.rating)
+	_, err := db.Exec(reviewQuery, review.isbn10, review.isbn13, review.did, review.text, review.rating)
 	if err != nil {
 		return fmt.Errorf("error inserting review: %v", err)
 	}
