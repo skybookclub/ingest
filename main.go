@@ -36,6 +36,7 @@ type Review struct {
 	did    string
 	text   string
 	rating int16
+	path   string
 }
 
 const (
@@ -97,33 +98,18 @@ func main() {
 	rscb := &events.RepoStreamCallbacks{
 		RepoCommit: func(evt *atproto.SyncSubscribeRepos_Commit) error {
 			for _, op := range evt.Ops {
-				if op.Action != "create" || !strings.HasPrefix(op.Path, "app.bsky.feed.post") {
+				if !strings.HasPrefix(op.Path, "app.bsky.feed.post") {
 					continue
 				}
 
-				pst, err := parsePost(ctx, evt, op)
-				if err != nil {
-					logger.Error("error parsing post", "err", err)
-					continue
+				switch op.Action {
+				case "create":
+					handleCreatePost(ctx, evt, op, db)
+					break
+				case "delete":
+					handleDeletePost(ctx, evt, op, db)
+					break
 				}
-
-				if !strings.Contains(pst.Text, hashtag) {
-					continue
-				}
-
-				review, err := extractReviewdata(pst.Text)
-				if err != nil {
-					logger.Error("error extracting review data", "err", err)
-					continue
-				}
-				review.did = evt.Repo
-
-				logger.Info("review data", "did", review.did, "isbn10", review.isbn10, "isbn13", review.isbn13, "rating", review.rating, "text", review.text)
-
-				if err := insert(db, review); err != nil {
-					logger.Error("error inserting review", "err", err)
-				}
-
 			}
 			return nil
 		},
@@ -131,6 +117,48 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+}
+
+func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB) {
+	did := evt.Repo
+	path := op.Path
+
+	const reviewDeleteQuery = "DELETE FROM reviews WHERE path = $1 and did = $2"
+
+	res, err := db.Exec(reviewDeleteQuery, path, did)
+	if err != nil {
+		logger.Error("error deleting review", "err", err)
+	}
+
+	if cnt, err := res.RowsAffected(); err == nil && cnt > 0 {
+		logger.Info("review deleted", "did", did, "path", path)
+	}
+}
+
+func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB) {
+	pst, err := parsePost(ctx, evt, op)
+	if err != nil {
+		logger.Error("error parsing post", "err", err)
+		return
+	}
+
+	if !strings.Contains(pst.Text, hashtag) {
+		return
+	}
+
+	review, err := extractReviewdata(pst.Text)
+	if err != nil {
+		logger.Error("error extracting review data", "err", err)
+		return
+	}
+	review.did = evt.Repo
+	review.path = op.Path
+
+	logger.Info("review data", "did", review.did, "isbn10", review.isbn10, "isbn13", review.isbn13, "rating", review.rating, "text", review.text)
+
+	if err := insert(db, review); err != nil {
+		logger.Error("error inserting review", "err", err)
+	}
 }
 
 func insert(db *sql.DB, review *Review) error {
@@ -159,15 +187,15 @@ func insert(db *sql.DB, review *Review) error {
 
 	// Then insert the review
 	const reviewQuery = `
-		INSERT INTO reviews (isbn10, isbn13, did, text, rating, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		INSERT INTO reviews (isbn10, isbn13, did, text, rating, path, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
 		ON CONFLICT ON CONSTRAINT reviews_pkey DO UPDATE SET
 			did = EXCLUDED.did,
 			text = EXCLUDED.text,
 			rating = EXCLUDED.rating,
 			updated_at = NOW()
 	`
-	_, err = db.Exec(reviewQuery, review.isbn10, review.isbn13, review.did, review.text, review.rating)
+	_, err = db.Exec(reviewQuery, review.isbn10, review.isbn13, review.did, review.text, review.rating, review.path)
 	if err != nil {
 		return fmt.Errorf("error inserting review: %v", err)
 	}
