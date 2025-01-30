@@ -320,11 +320,12 @@ func convertISBN13to10(isbn13 string) (string, error) {
 func extractReviewdata(str string) (*Review, error) {
 	review := &Review{}
 
-	// ISBN regex pattern matching 10 or 13 digits, allowing hyphens
-	isbnRegex := regexp.MustCompile(`isbn:([0-9-]{10,17})`)
+	// Case insensitive ISBN regex with flexible whitespace around colon
+	isbnRegex := regexp.MustCompile(`(?i)isbn\s*:\s*([0-9-]{10,17})`)
 	matches := isbnRegex.FindStringSubmatch(str)
 
 	if len(matches) > 1 {
+		// Remove all non-digit characters (including dashes and spaces)
 		isbn := regexp.MustCompile(`[^0-9]`).ReplaceAllString(matches[1], "")
 		if len(isbn) == 10 {
 			review.isbn10 = isbn
