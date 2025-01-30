@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -132,17 +134,26 @@ func main() {
 }
 
 func insert(db *sql.DB, review *Review) error {
-	// First check and insert book if needed
-	const bookQuery = `
-		INSERT INTO books (isbn10, isbn13, created_at, updated_at)
-		VALUES ($1, $2, NOW(), NOW())
-		ON CONFLICT (isbn10, isbn13) DO NOTHING
-	`
-
-	if review.isbn10 != "" || review.isbn13 != "" {
-		_, err := db.Exec(bookQuery, review.isbn10, review.isbn13)
+	const bookQuery = `SELECT true from books WHERE isbn10 = $1 and isbn13 = $2`
+	var exists bool
+	err := db.QueryRow(bookQuery, review.isbn10, review.isbn13).Scan(&exists)
+	if err != nil && err == sql.ErrNoRows {
+		// If book doesn't exist, try to fetch data from GoodReads
+		err = hydrateBook(review, db)
 		if err != nil {
-			return fmt.Errorf("error inserting book: %v", err)
+			logger.Error("error hydrating book", "err", err)
+			// Fallback to basic book insert if GoodReads data fetch fails
+			const basicBookInsertQuery = `
+				INSERT INTO books (isbn10, isbn13, created_at, updated_at)
+				VALUES ($1, $2, NOW(), NOW())
+				ON CONFLICT (isbn10, isbn13) DO NOTHING`
+
+			if review.isbn10 != "" || review.isbn13 != "" {
+				_, err := db.Exec(basicBookInsertQuery, review.isbn10, review.isbn13)
+				if err != nil {
+					return fmt.Errorf("error inserting book: %v", err)
+				}
+			}
 		}
 	}
 
@@ -156,9 +167,63 @@ func insert(db *sql.DB, review *Review) error {
 			rating = EXCLUDED.rating,
 			updated_at = NOW()
 	`
-	_, err := db.Exec(reviewQuery, review.isbn10, review.isbn13, review.did, review.text, review.rating)
+	_, err = db.Exec(reviewQuery, review.isbn10, review.isbn13, review.did, review.text, review.rating)
 	if err != nil {
 		return fmt.Errorf("error inserting review: %v", err)
+	}
+	return nil
+}
+
+func hydrateBook(review *Review, db *sql.DB) error {
+	url := fmt.Sprintf("https://www.goodreads.com/search?utf8=%%E2%%9C%%93&query=%s", review.isbn13)
+	resp, err := http.Get(url)
+	if err != nil {
+		logger.Error("failed to fetch GoodReads data", "err", err)
+		return err
+	} else {
+		defer resp.Body.Close()
+
+		if resp.StatusCode == 200 {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+
+			}
+			re := regexp.MustCompile(`<script\s+type="application/ld\+json">(.*?)</script>`)
+			matches := re.FindSubmatch(body)
+
+			if len(matches) > 1 {
+				var jsonData map[string]interface{}
+				err = json.Unmarshal(matches[1], &jsonData)
+				if err != nil {
+					return err
+				}
+				// Enhanced book insert with GoodReads data
+				const bookInsertQuery = `
+					INSERT INTO books (isbn10, isbn13, title, author, cover_image_url, created_at, updated_at)
+					VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+					ON CONFLICT (isbn10, isbn13) DO NOTHING`
+
+				title, _ := jsonData["name"].(string)
+				authors, _ := jsonData["author"].([]interface{})
+				var author string
+				if len(authors) > 0 {
+					if authorMap, ok := authors[0].(map[string]interface{}); ok {
+						author, _ = authorMap["name"].(string)
+					}
+				}
+				coverURL, _ := jsonData["image"].(string)
+
+				_, err = db.Exec(bookInsertQuery, review.isbn10, review.isbn13, title, author, coverURL)
+				if err != nil {
+					logger.Error("error inserting book with metadata", "err", err)
+					return err
+				}
+				return nil
+			} else {
+				return errors.New("no GoodReads data found")
+			}
+		}
 	}
 	return nil
 }
