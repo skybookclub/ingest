@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
@@ -75,7 +76,35 @@ func main() {
 
 	logger.Info("starting application")
 
-	arg := "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
+	const seqQuery = "select val from firehose_state where key = 'seq' limit 1"
+	var seq int64
+	var seq_str string
+	err = db.QueryRow(seqQuery).Scan(&seq_str)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			seq = 1
+			_, err = db.Exec("insert into firehose_state (key, val, created_at, updated_at) values ('seq', '1', now(), now())")
+			if err != nil {
+				logger.Error("error inserting seq", "err", err)
+				return
+			}
+		} else {
+			logger.Error("error querying seq", "err", err)
+			return
+		}
+	} else {
+		seq, err = strconv.ParseInt(seq_str, 10, 64)
+		if err != nil {
+			logger.Error("error parsing seq", "err", err)
+			seq = 1
+		}
+	}
+
+	last_seq_timestamp := time.Now()
+
+	logger.Info("starting from seq", "seq", seq)
+
+	arg := "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos?cursor=" + strconv.FormatInt(seq, 10)
 
 	logger.Info("dialing", "url", arg)
 	d := websocket.DefaultDialer
@@ -104,11 +133,29 @@ func main() {
 
 				switch op.Action {
 				case "create":
-					handleCreatePost(ctx, evt, op, db)
+					go handleCreatePost(ctx, evt, op, db)
 					break
 				case "delete":
-					handleDeletePost(ctx, evt, op, db)
+					go handleDeletePost(ctx, evt, op, db)
 					break
+				}
+			}
+
+			seq = evt.Seq
+
+			if time.Since(last_seq_timestamp) > 5*time.Second {
+				last_seq_timestamp = time.Now()
+				_, err := db.Exec("update firehose_state set val = $1, updated_at = now() where key = 'seq'", strconv.FormatInt(seq, 10))
+				if err != nil {
+					logger.Error("error updating seq", "err", err)
+				}
+
+				_, err = db.Exec(`
+					insert into firehose_state (key, val, created_at, updated_at) values ('timestamp', $1, now(), now())
+					on conflict (key) do update set val = $1, updated_at = now()`,
+					evt.Time)
+				if err != nil {
+					logger.Error("error updating timestamp", "err", err)
 				}
 			}
 			return nil
@@ -130,8 +177,10 @@ func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commi
 		logger.Error("error deleting review", "err", err)
 	}
 
-	if cnt, err := res.RowsAffected(); err == nil && cnt > 0 {
-		logger.Info("review deleted", "did", did, "path", path)
+	if cnt, err := res.RowsAffected(); err == nil {
+		if cnt > 0 {
+			logger.Info("review deleted", "did", did, "path", path)
+		}
 	}
 }
 
@@ -159,6 +208,7 @@ func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commi
 	if err := insert(db, review); err != nil {
 		logger.Error("error inserting review", "err", err)
 	}
+	return
 }
 
 func insert(db *sql.DB, review *Review) error {
