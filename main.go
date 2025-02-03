@@ -133,10 +133,10 @@ func main() {
 
 				switch op.Action {
 				case "create":
-					go handleCreatePost(ctx, evt, op, db)
+					handleCreatePost(ctx, evt, op, db)
 					break
 				case "delete":
-					go handleDeletePost(ctx, evt, op, db)
+					handleDeletePost(ctx, evt, op, db)
 					break
 				}
 			}
