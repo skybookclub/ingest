@@ -150,8 +150,11 @@ func main() {
 			seq = evt.Seq
 
 			if time.Since(last_seq_timestamp) > 5*time.Second {
+				evtTime, err := time.Parse(time.RFC3339, evt.Time)
+				lag := time.Now().Sub(evtTime).Seconds()
+				logger.Info(fmt.Sprintf("at: %s lag: %f seconds", evt.Time, lag), "at", evtTime, "lag", lag)
 				last_seq_timestamp = time.Now()
-				_, err := db.Exec("update firehose_state set val = $1, updated_at = now() where key = 'seq'", strconv.FormatInt(seq, 10))
+				_, err = db.Exec("update firehose_state set val = $1, updated_at = now() where key = 'seq'", strconv.FormatInt(seq, 10))
 				if err != nil {
 					logger.Error("error updating seq", "err", err)
 				}
