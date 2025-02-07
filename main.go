@@ -40,6 +40,12 @@ type Review struct {
 	path   string
 }
 
+type Person struct {
+	did    string
+	handle string
+	avatar string
+}
+
 const (
 	hashtag = "#skybookclub"
 )
@@ -233,6 +239,12 @@ func insert(db *sql.DB, review *Review) error {
 				}
 			}
 		}
+	}
+
+	// Ensure profile exists
+	err = ensureProfile(db, review.did)
+	if err != nil {
+		return fmt.Errorf("error extracting person data: %v", err)
 	}
 
 	// Then insert the review
@@ -438,4 +450,71 @@ func extractReviewdata(str string) (*Review, error) {
 
 	review.text = cleanText
 	return review, nil
+}
+
+type ProfileResponse struct {
+	Profiles []struct {
+		Did    string `json:"did"`
+		Handle string `json:"handle"`
+		Avatar string `json:"avatar"`
+	} `json:"profiles"`
+}
+
+func extractPersonData(did string) (*Person, error) {
+	url := "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles?actors=" + did
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching profile: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var profileResp ProfileResponse
+	if err := json.NewDecoder(resp.Body).Decode(&profileResp); err != nil {
+		return nil, fmt.Errorf("error decoding response: %v", err)
+	}
+
+	if len(profileResp.Profiles) == 0 {
+		return nil, fmt.Errorf("no profile found for did: %s", did)
+	}
+
+	profile := profileResp.Profiles[0]
+	return &Person{
+		did:    profile.Did,
+		handle: profile.Handle,
+		avatar: profile.Avatar,
+	}, nil
+}
+
+func ensureProfile(db *sql.DB, did string) error {
+	person, err := extractPersonData(did)
+	if err != nil {
+		// insert empty data
+		person = &Person{
+			did: did,
+		}
+	}
+
+	const profileQuery = `SELECT true from profiles WHERE did = $1`
+	var exists bool
+	err = db.QueryRow(profileQuery, person.did).Scan(&exists)
+	if err != nil && err == sql.ErrNoRows {
+		const profileInsertQuery = `
+			INSERT INTO profiles (did, handle, avatar, created_at, updated_at)
+			VALUES ($1, $2, $3, NOW(), NOW())
+			ON CONFLICT (did) DO UPDATE SET
+				handle = EXCLUDED.handle,
+				avatar = EXCLUDED.avatar,
+				updated_at = NOW()
+		`
+		_, err := db.Exec(profileInsertQuery, person.did, person.handle, person.avatar)
+		if err != nil {
+			return fmt.Errorf("error inserting profile: %v", err)
+		}
+	}
+	return nil
 }
