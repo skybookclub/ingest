@@ -6,13 +6,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"syscall"
@@ -50,6 +53,8 @@ const (
 	hashtag = "#skybookclub"
 )
 
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+
 func main() {
 	// Initialize logger
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -58,6 +63,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
 	defer stop()
+
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	dbHost := os.Getenv("POSTGRES_HOST")
 	if dbHost == "" {
@@ -94,8 +112,8 @@ func main() {
 	err = db.QueryRow(seqQuery).Scan(&seq_str)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			seq = 1
-			_, err = db.Exec("insert into firehose_state (key, val, created_at, updated_at) values ('seq', '1', now(), now())")
+			seq = -1
+			_, err = db.Exec("insert into firehose_state (key, val, created_at, updated_at) values ('seq', null, now(), now())")
 			if err != nil {
 				logger.Error("error inserting seq", "err", err)
 				return
@@ -114,13 +132,18 @@ func main() {
 
 	last_seq_timestamp := time.Now()
 
-	logger.Info("starting from seq", "seq", seq)
+	var url string
+	if seq == -1 {
+		logger.Info("starting from now")
+		url = "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos"
+	} else {
+		logger.Info("starting from seq", "seq", seq)
+		url = "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos?cursor=" + strconv.FormatInt(seq, 10)
+	}
 
-	arg := "wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos?cursor=" + strconv.FormatInt(seq, 10)
-
-	logger.Info("dialing", "url", arg)
+	logger.Info("dialing", "url", url)
 	d := websocket.DefaultDialer
-	con, _, err := d.Dial(arg, http.Header{})
+	con, _, err := d.Dial(url, http.Header{})
 	if err != nil {
 		logger.Error("error dialing", "err", err)
 		return
@@ -179,7 +202,7 @@ func main() {
 				if err != nil {
 					logger.Error("error updating timestamp", "err", err)
 				}
-				logger.Debug("updated firehose state")
+				// logger.Debug("updated firehose state")
 			}
 			return nil
 		},
