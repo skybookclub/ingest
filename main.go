@@ -84,6 +84,8 @@ func main() {
 		return
 	}
 
+	db.SetMaxOpenConns(8)
+
 	logger.Info("starting application")
 
 	const seqQuery = "select val from firehose_state where key = 'seq' limit 1"
@@ -147,11 +149,11 @@ func main() {
 
 				switch op.Action {
 				case "create":
-					handleCreatePost(ctx, evt, op, db)
+					go handleCreatePost(ctx, evt, op, db)
 					//logger.Debug("processed create op")
 					break
 				case "delete":
-					handleDeletePost(ctx, evt, op, db)
+					go handleDeletePost(ctx, evt, op, db)
 					//logger.Debug("processed delete op")
 					break
 				}
