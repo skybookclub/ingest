@@ -59,6 +59,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
 	defer stop()
 
+	dbHost := os.Getenv("POSTGRES_HOST")
+	if dbHost == "" {
+		dbHost = "127.0.0.1"
+	}
 	dbUser := os.Getenv("POSTGRES_USER")
 	dbName := os.Getenv("POSTGRES_DATABASE")
 	dbPassword := os.Getenv("POSTGRES_PASSWORD")
@@ -71,8 +75,8 @@ func main() {
 		return
 	}
 
-	connStr := fmt.Sprintf("user=%s dbname=%s password=%s sslmode=disable",
-		dbUser, dbName, dbPassword)
+	connStr := fmt.Sprintf("host=%s user=%s dbname=%s password=%s sslmode=disable",
+		dbHost, dbUser, dbName, dbPassword)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -132,17 +136,23 @@ func main() {
 
 	rscb := &events.RepoStreamCallbacks{
 		RepoCommit: func(evt *atproto.SyncSubscribeRepos_Commit) error {
+			//logger.Debug("got new repo commit")
 			for _, op := range evt.Ops {
+
 				if !strings.HasPrefix(op.Path, "app.bsky.feed.post") {
 					continue
 				}
 
+				// logger.Debug("got new post")
+
 				switch op.Action {
 				case "create":
 					handleCreatePost(ctx, evt, op, db)
+					//logger.Debug("processed create op")
 					break
 				case "delete":
 					handleDeletePost(ctx, evt, op, db)
+					//logger.Debug("processed delete op")
 					break
 				}
 			}
@@ -150,9 +160,10 @@ func main() {
 			seq = evt.Seq
 
 			if time.Since(last_seq_timestamp) > 5*time.Second {
+				// logger.Debug("updating firehose state")
 				evtTime, err := time.Parse(time.RFC3339, evt.Time)
 				lag := time.Now().Sub(evtTime).Seconds()
-				logger.Info(fmt.Sprintf("at: %s lag: %f seconds", evt.Time, lag), "at", evtTime, "lag", lag)
+				logger.Info(fmt.Sprintf("at: %s lag: %f seconds", evtTime, lag))
 				last_seq_timestamp = time.Now()
 				_, err = db.Exec("update firehose_state set val = $1, updated_at = now() where key = 'seq'", strconv.FormatInt(seq, 10))
 				if err != nil {
@@ -166,6 +177,7 @@ func main() {
 				if err != nil {
 					logger.Error("error updating timestamp", "err", err)
 				}
+				logger.Debug("updated firehose state")
 			}
 			return nil
 		},
@@ -209,6 +221,9 @@ func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commi
 		logger.Error("error extracting review data", "err", err)
 		return
 	}
+
+	logger.Debug("extracted review data")
+
 	review.did = evt.Repo
 	review.path = op.Path
 
@@ -221,6 +236,7 @@ func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commi
 }
 
 func insert(db *sql.DB, review *Review) error {
+	logger.Debug("inserting book details")
 	const bookQuery = `SELECT true from books WHERE isbn10 = $1 and isbn13 = $2`
 	var exists bool
 	err := db.QueryRow(bookQuery, review.isbn10, review.isbn13).Scan(&exists)
@@ -244,11 +260,16 @@ func insert(db *sql.DB, review *Review) error {
 		}
 	}
 
+	logger.Debug("done inserting book details")
+	logger.Debug("inserting profile")
+
 	// Ensure profile exists
 	err = ensureProfile(db, review.did)
 	if err != nil {
 		return fmt.Errorf("error extracting person data: %v", err)
 	}
+
+	logger.Debug("done inserting profile")
 
 	// Then insert the review
 	const reviewQuery = `
