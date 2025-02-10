@@ -5,15 +5,14 @@ service: skybookclub-ingest
 image: andreymaraev/skybookclub-ingest
 
 ssh:
-  user: thevk
+  user: <%= ENV.fetch("DEPLOY_USER") %>
 
 primary_role: ingest
 
 # Deploy to these servers.
 servers:
   ingest:
-    hosts:
-      - 192.168.0.138
+    hosts: <%= ENV.fetch("INGEST_IPS").split(' ') %>
     proxy: false
   # job:
   #   hosts:
@@ -51,7 +50,7 @@ builder:
 #
 env:
   clear:
-    POSTGRES_HOST: 192.168.0.138
+    POSTGRES_HOST: <%= ENV.fetch("DATABASE_HOST") %>
     POSTGRES_DATABASE: skybookclub
   secret:
     - POSTGRES_USER
