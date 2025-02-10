@@ -93,7 +93,7 @@ func main() {
 		return
 	}
 
-	connStr := fmt.Sprintf("host=%s user=%s dbname=%s password=%s sslmode=disable",
+	connStr := fmt.Sprintf("host=%s user=%s dbname=%s password=%s",
 		dbHost, dbUser, dbName, dbPassword)
 
 	db, err := sql.Open("postgres", connStr)
