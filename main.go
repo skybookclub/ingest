@@ -29,7 +29,7 @@ import (
 	"github.com/bluesky-social/indigo/repo"
 	"github.com/gorilla/websocket"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5"
 )
 
 var logger *slog.Logger
@@ -96,7 +96,7 @@ func main() {
 	connStr := fmt.Sprintf("host=%s user=%s dbname=%s password=%s",
 		dbHost, dbUser, dbName, dbPassword)
 
-	db, err := sql.Open("postgres", connStr)
+	db, err := sql.Open("pgx", connStr)
 	if err != nil {
 		logger.Error("error connecting to database", "err", err)
 		return
