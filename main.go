@@ -77,19 +77,19 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	dbHost := os.Getenv("POSTGRES_HOST")
+	dbHost := os.Getenv("DATABASE_HOST")
 	if dbHost == "" {
 		dbHost = "127.0.0.1"
 	}
-	dbUser := os.Getenv("POSTGRES_USER")
-	dbName := os.Getenv("POSTGRES_DATABASE")
-	dbPassword := os.Getenv("POSTGRES_PASSWORD")
+	dbUser := os.Getenv("DATABASE_USERNAME")
+	dbName := os.Getenv("DATABASE_DATABASE")
+	dbPassword := os.Getenv("DATABASE_PASSWORD")
 
 	if dbUser == "" || dbName == "" || dbPassword == "" {
 		logger.Error("required environment variables not set",
-			"POSTGRES_USER", dbUser == "",
-			"POSTGRES_DATABASE", dbName == "",
-			"POSTGRES_PASSWORD", dbPassword == "")
+			"DATABASE_USERNAME", dbUser == "",
+			"DATABASE_DATABASE", dbName == "",
+			"DATABASE_PASSWORD", dbPassword == "")
 		return
 	}
 
