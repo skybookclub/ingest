@@ -55,6 +55,8 @@ const (
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 
+var last_seq_timestamp = time.Now()
+
 func main() {
 	// Initialize logger
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -130,8 +132,6 @@ func main() {
 		}
 	}
 
-	last_seq_timestamp := time.Now()
-
 	var url string
 	if seq == -1 {
 		logger.Info("starting from now")
@@ -148,6 +148,8 @@ func main() {
 		logger.Error("error dialing", "err", err)
 		return
 	}
+
+	go watchdog()
 
 	logger.Info("Stream Started")
 	defer func() {
@@ -210,6 +212,33 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+}
+
+func watchdog() {
+	unhealthyAt := time.Now()
+	unhealthy := false
+
+	for {
+		if !isHealthy() {
+			if !unhealthy {
+				unhealthyAt = time.Now()
+				unhealthy = true
+			} else {
+				if time.Since(unhealthyAt) > 5*time.Minute {
+					logger.Error("unhealthy for 5 minutes, exiting")
+					os.Exit(1)
+				}
+			}
+		} else {
+			unhealthy = false
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func isHealthy() bool {
+	seq_lag := time.Now().Sub(last_seq_timestamp).Seconds()
+	return seq_lag < 60
 }
 
 func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB) {
