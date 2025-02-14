@@ -58,10 +58,7 @@ var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 var last_seq_timestamp = time.Now()
 
 func main() {
-	// Initialize logger
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	setupLogger()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
 	defer stop()
@@ -212,6 +209,26 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+}
+
+func setupLogger() {
+	logFormat := os.Getenv("LOG_FORMAT")
+	logLevel := slog.LevelDebug
+	var logHandler slog.Handler
+
+	switch logFormat {
+	case "json":
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: logLevel,
+		})
+	default:
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: logLevel,
+		})
+	}
+
+	// Initialize logger
+	logger = slog.New(logHandler)
 }
 
 func watchdog() {

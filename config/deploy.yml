@@ -52,6 +52,7 @@ env:
   clear:
     DATABASE_HOST: <%= ENV.fetch("DATABASE_HOST") %>
     DATABASE_DATABASE: skybookclub
+    LOG_FORMAT: json
   secret:
     - DATABASE_USERNAME
     - DATABASE_PASSWORD
