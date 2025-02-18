@@ -18,6 +18,7 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -158,6 +159,8 @@ func main() {
 		_ = con.Close()
 	}()
 
+	var wg sync.WaitGroup
+
 	rscb := &events.RepoStreamCallbacks{
 		RepoCommit: func(evt *atproto.SyncSubscribeRepos_Commit) error {
 			//logger.Debug("got new repo commit")
@@ -171,11 +174,13 @@ func main() {
 
 				switch op.Action {
 				case "create":
-					go handleCreatePost(ctx, evt, op, db)
+					wg.Add(1)
+					go handleCreatePost(ctx, evt, op, db, &wg)
 					//logger.Debug("processed create op")
 					break
 				case "delete":
-					go handleDeletePost(ctx, evt, op, db)
+					wg.Add(1)
+					go handleDeletePost(ctx, evt, op, db, &wg)
 					//logger.Debug("processed delete op")
 					break
 				}
@@ -209,6 +214,10 @@ func main() {
 
 	sched := sequential.NewScheduler("myscheduler", rscb.EventHandler)
 	events.HandleRepoStream(context.Background(), con, sched, logger)
+
+	logger.Info("Waiting for workers to finish")
+
+	wg.Wait()
 }
 
 func setupLogger() {
@@ -258,13 +267,15 @@ func isHealthy() bool {
 	return seq_lag < 60
 }
 
-func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB) {
+func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	did := evt.Repo
 	path := op.Path
 
 	const reviewDeleteQuery = "DELETE FROM reviews WHERE path = $1 and did = $2"
 
-	res, err := db.Exec(reviewDeleteQuery, path, did)
+	res, err := db.ExecContext(ctx, reviewDeleteQuery, path, did)
 	if err != nil {
 		logger.Error("error deleting review", "err", err)
 	}
@@ -276,7 +287,9 @@ func handleDeletePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commi
 	}
 }
 
-func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB) {
+func handleCreatePost(ctx context.Context, evt *atproto.SyncSubscribeRepos_Commit, op *atproto.SyncSubscribeRepos_RepoOp, db *sql.DB, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	pst, err := parsePost(ctx, evt, op)
 	if err != nil {
 		logger.Error("error parsing post", "err", err)
