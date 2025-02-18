@@ -55,16 +55,33 @@ const (
 )
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+var targetLag = flag.Int("target-lag", -1, "target lag in milliseconds")
+var timeLimit = flag.Int("time-limit", -1, "max allowed execution time in milliseconds")
 
 var last_seq_timestamp = time.Now()
 
 func main() {
+	flag.Parse()
+
 	setupLogger()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
+	ctx := context.Background()
+	var stop context.CancelFunc
+
+	if *timeLimit > 0 {
+		t := time.Now().Add(time.Duration(*timeLimit) * time.Millisecond)
+
+		logger.Info("setting deadline", "deadline", t)
+		ctx, stop = context.WithDeadline(ctx, t)
+	}
+
+	if *targetLag > 0 {
+		logger.Info("setting target lag", "targetLag", *targetLag)
+	}
+
+	ctx, stop = signal.NotifyContext(ctx, syscall.SIGINT)
 	defer stop()
 
-	flag.Parse()
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -206,7 +223,11 @@ func main() {
 				if err != nil {
 					logger.Error("error updating timestamp", "err", err)
 				}
-				// logger.Debug("updated firehose state")
+				if *targetLag > 0 && lag*1000 < float64(*targetLag) {
+					logger.Info("target lag reached, exiting")
+					stop()
+				}
+
 			}
 			return nil
 		},
