@@ -209,7 +209,7 @@ func main() {
 				// logger.Debug("updating firehose state")
 				evtTime, err := time.Parse(time.RFC3339, evt.Time)
 				lag := time.Now().Sub(evtTime).Seconds()
-				logger.Info(fmt.Sprintf("at: %s lag: %f seconds", evtTime, lag))
+				logger.Info(fmt.Sprintf("seq: %d, at: %s lag: %f seconds", seq, evtTime, lag))
 				last_seq_timestamp = time.Now()
 				_, err = db.Exec("update firehose_state set val = $1, updated_at = now() where key = 'seq'", strconv.FormatInt(seq, 10))
 				if err != nil {
