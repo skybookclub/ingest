@@ -54,6 +54,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           INGEST_IPS: ${{ secrets.INGEST_IPS }}
           KAMAL_REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          DATABASE_HOST_IP: ${{ secrets.INGEST_IPS }}
         run: |
           sudo gem install kamal
           kamal deploy
