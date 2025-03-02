@@ -26,3 +26,35 @@ jobs:
 
     - name: Test
       run: go test -v ./...
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: SSH
+        env:
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }} 
+          KNOWN_HOSTS: ${{ secrets.KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh $SSH_USER@${{ secrets.INGEST_IPS }} "echo 'Hello, world!'"
+      
+      - uses: actions/checkout@v4
+      
+      - name: Deploy
+        env:
+          DATABASE_HOST: ${{ secrets.DATABASE_HOST }}
+          DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          INGEST_IPS: ${{ secrets.INGEST_IPS }}
+          KAMAL_REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          sudo gem install kamal
+          kamal deploy
+
